@@ -21,17 +21,67 @@
     lives: 3, wave: 1, lastTime: 0, shake: 0, flash: 0,
     ship: null, rocks: [], bullets: [], particles: [], stars: [],
     keys: { left: false, right: false, thrust: false, fire: false },
-    nextShot: 0, audio: null
+    camera: { vx: 0, vy: 0 }, nextShot: 0, audio: null
   };
 
   const random = (min, max) => min + Math.random() * (max - min);
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-  const wrap = (o, margin = 0) => {
-    if (o.x < -margin) o.x = state.width + margin;
-    if (o.x > state.width + margin) o.x = -margin;
-    if (o.y < -margin) o.y = state.height + margin;
-    if (o.y > state.height + margin) o.y = -margin;
-  };
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+  function wrapStar(star) {
+    if (star.x < 0) star.x += state.width;
+    if (star.x >= state.width) star.x -= state.width;
+    if (star.y < 0) star.y += state.height;
+    if (star.y >= state.height) star.y -= state.height;
+  }
+
+  function edgePressure(value, size, zone) {
+    if (value < zone) return -clamp((zone - value) / zone, 0, 1);
+    if (value > size - zone) return clamp((value - (size - zone)) / zone, 0, 1);
+    return 0;
+  }
+
+  function recycleRock(rock) {
+    const margin = rock.radius + 110;
+    if (rock.x >= -margin && rock.x <= state.width + margin && rock.y >= -margin && rock.y <= state.height + margin) return;
+
+    if (Math.abs(rock.x - state.width / 2) / state.width > Math.abs(rock.y - state.height / 2) / state.height) {
+      rock.x = rock.x < 0 ? state.width + margin : -margin;
+      rock.y = random(-40, state.height + 40);
+    } else {
+      rock.y = rock.y < 0 ? state.height + margin : -margin;
+      rock.x = random(-40, state.width + 40);
+    }
+  }
+
+  function scrollScene(dt, ship) {
+    const zoneX = clamp(state.width * .22, 92, 230);
+    const zoneY = clamp(state.height * .22, 78, 170);
+    const pressureX = edgePressure(ship.x, state.width, zoneX);
+    const pressureY = edgePressure(ship.y, state.height, zoneY);
+    const ease = pressure => Math.sign(pressure) * Math.pow(Math.abs(pressure), 1.7);
+    const accelerating = state.keys.thrust;
+    const targetX = accelerating && Math.sign(ship.vx) === Math.sign(pressureX) ? ship.vx * Math.abs(ease(pressureX)) : 0;
+    const targetY = accelerating && Math.sign(ship.vy) === Math.sign(pressureY) ? ship.vy * Math.abs(ease(pressureY)) : 0;
+    const response = 1 - Math.exp(-(accelerating ? 8 : 4.2) * dt);
+
+    state.camera.vx += (targetX - state.camera.vx) * response;
+    state.camera.vy += (targetY - state.camera.vy) * response;
+    if (!accelerating && Math.abs(state.camera.vx) < .4) state.camera.vx = 0;
+    if (!accelerating && Math.abs(state.camera.vy) < .4) state.camera.vy = 0;
+
+    const dx = state.camera.vx * dt;
+    const dy = state.camera.vy * dt;
+    ship.x -= dx; ship.y -= dy;
+    for (const rock of state.rocks) { rock.x -= dx; rock.y -= dy; }
+    for (const bullet of state.bullets) { bullet.x -= dx; bullet.y -= dy; }
+    for (const particle of state.particles) { particle.x -= dx; particle.y -= dy; }
+    for (const star of state.stars) {
+      star.x -= dx * (.16 + star.depth * .34);
+      star.y -= dy * (.16 + star.depth * .34);
+      wrapStar(star);
+    }
+  }
 
   function resize() {
     const oldW = state.width || innerWidth;
@@ -87,6 +137,7 @@
   function beginGame() {
     unlockAudio();
     state.score = 0; state.lives = 3; state.wave = 1; state.running = true; state.paused = false;
+    state.camera.vx = 0; state.camera.vy = 0;
     state.bullets = []; state.particles = []; state.rocks = []; state.ship = makeShip();
     startPanel.classList.remove('visible'); overPanel.classList.remove('visible'); pauseLabel.classList.remove('visible');
     spawnWave(); updateHud(); state.lastTime = performance.now();
@@ -147,6 +198,7 @@
     const ship = state.ship;
     if (!ship || ship.invulnerable > 0 || ship.dead) return;
     ship.dead = true;
+    state.camera.vx = 0; state.camera.vy = 0;
     state.lives--;
     addParticles(ship.x, ship.y, '#ff4d8d', 28, 240);
     addParticles(ship.x, ship.y, '#edf7ff', 12, 150);
@@ -187,17 +239,27 @@
         }
       }
       if (state.keys.fire) shoot(now);
-      const drag = Math.pow(.988, dt * 60);
+      const drag = Math.pow(state.keys.thrust ? .988 : .94, dt * 60);
       ship.vx *= drag; ship.vy *= drag;
       const maxSpeed = 400, speed = Math.hypot(ship.vx, ship.vy);
       if (speed > maxSpeed) { ship.vx *= maxSpeed / speed; ship.vy *= maxSpeed / speed; }
-      ship.x += ship.vx * dt; ship.y += ship.vy * dt; wrap(ship, 18);
+      ship.x += ship.vx * dt; ship.y += ship.vy * dt;
+      scrollScene(dt, ship);
+      const padding = 24;
+      if (ship.x < padding || ship.x > state.width - padding) {
+        ship.x = clamp(ship.x, padding, state.width - padding);
+      }
+      if (ship.y < padding || ship.y > state.height - padding) {
+        ship.y = clamp(ship.y, padding, state.height - padding);
+      }
       ship.invulnerable = Math.max(0, ship.invulnerable - dt);
     }
 
     for (let i = state.bullets.length - 1; i >= 0; i--) {
-      const b = state.bullets[i]; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt; wrap(b, 4);
-      if (b.life <= 0) { state.bullets.splice(i, 1); continue; }
+      const b = state.bullets[i]; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      if (b.life <= 0 || b.x < -40 || b.x > state.width + 40 || b.y < -40 || b.y > state.height + 40) {
+        state.bullets.splice(i, 1); continue;
+      }
       for (let j = state.rocks.length - 1; j >= 0; j--) {
         if (distance(b, state.rocks[j]) < state.rocks[j].radius + b.radius) {
           splitRock(j, b.x, b.y); state.bullets.splice(i, 1); break;
@@ -206,7 +268,7 @@
     }
 
     for (const rock of state.rocks) {
-      rock.x += rock.vx * dt; rock.y += rock.vy * dt; rock.angle += rock.spin * dt; wrap(rock, rock.radius);
+      rock.x += rock.vx * dt; rock.y += rock.vy * dt; rock.angle += rock.spin * dt; recycleRock(rock);
       if (ship && !ship.dead && ship.invulnerable <= 0 && distance(ship, rock) < rock.radius + ship.radius * .7) hitShip();
     }
 
