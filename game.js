@@ -35,10 +35,20 @@
     if (star.y >= state.height) star.y -= state.height;
   }
 
-  function edgePressure(value, size, zone) {
-    if (value < zone) return -clamp((zone - value) / zone, 0, 1);
-    if (value > size - zone) return clamp((value - (size - zone)) / zone, 0, 1);
+  function edgePressure(value, size, zone, inset) {
+    const ramp = zone - inset;
+    if (value < zone) return -clamp((zone - value) / ramp, 0, 1);
+    if (value > size - zone) return clamp((value - (size - zone)) / ramp, 0, 1);
     return 0;
+  }
+
+  function cameraBounds() {
+    return {
+      insetX: clamp(state.width * .075, 56, 96),
+      insetY: clamp(state.height * .085, 50, 82),
+      zoneX: clamp(state.width * .24, 96, 230),
+      zoneY: clamp(state.height * .24, 82, 170)
+    };
   }
 
   function recycleRock(rock) {
@@ -55,15 +65,14 @@
   }
 
   function scrollScene(dt, ship) {
-    const zoneX = clamp(state.width * .22, 92, 230);
-    const zoneY = clamp(state.height * .22, 78, 170);
-    const pressureX = edgePressure(ship.x, state.width, zoneX);
-    const pressureY = edgePressure(ship.y, state.height, zoneY);
-    const ease = pressure => Math.sign(pressure) * Math.pow(Math.abs(pressure), 1.7);
+    const { insetX, insetY, zoneX, zoneY } = cameraBounds();
+    const pressureX = edgePressure(ship.x, state.width, zoneX, insetX);
+    const pressureY = edgePressure(ship.y, state.height, zoneY, insetY);
+    const followGain = pressure => Math.pow(Math.abs(pressure), 1.45) * 1.65;
     const accelerating = state.keys.thrust;
-    const targetX = accelerating && Math.sign(ship.vx) === Math.sign(pressureX) ? ship.vx * Math.abs(ease(pressureX)) : 0;
-    const targetY = accelerating && Math.sign(ship.vy) === Math.sign(pressureY) ? ship.vy * Math.abs(ease(pressureY)) : 0;
-    const response = 1 - Math.exp(-(accelerating ? 8 : 4.2) * dt);
+    const targetX = accelerating && Math.sign(ship.vx) === Math.sign(pressureX) ? ship.vx * followGain(pressureX) : 0;
+    const targetY = accelerating && Math.sign(ship.vy) === Math.sign(pressureY) ? ship.vy * followGain(pressureY) : 0;
+    const response = 1 - Math.exp(-(accelerating ? 10 : 4.2) * dt);
 
     state.camera.vx += (targetX - state.camera.vx) * response;
     state.camera.vy += (targetY - state.camera.vy) * response;
@@ -245,12 +254,20 @@
       if (speed > maxSpeed) { ship.vx *= maxSpeed / speed; ship.vy *= maxSpeed / speed; }
       ship.x += ship.vx * dt; ship.y += ship.vy * dt;
       scrollScene(dt, ship);
-      const padding = 24;
-      if (ship.x < padding || ship.x > state.width - padding) {
-        ship.x = clamp(ship.x, padding, state.width - padding);
+      const { insetX, insetY } = cameraBounds();
+      if (ship.x < insetX) {
+        ship.x = insetX;
+        state.camera.vx = Math.min(state.camera.vx, ship.vx * 1.15);
+      } else if (ship.x > state.width - insetX) {
+        ship.x = state.width - insetX;
+        state.camera.vx = Math.max(state.camera.vx, ship.vx * 1.15);
       }
-      if (ship.y < padding || ship.y > state.height - padding) {
-        ship.y = clamp(ship.y, padding, state.height - padding);
+      if (ship.y < insetY) {
+        ship.y = insetY;
+        state.camera.vy = Math.min(state.camera.vy, ship.vy * 1.15);
+      } else if (ship.y > state.height - insetY) {
+        ship.y = state.height - insetY;
+        state.camera.vy = Math.max(state.camera.vy, ship.vy * 1.15);
       }
       ship.invulnerable = Math.max(0, ship.invulnerable - dt);
     }

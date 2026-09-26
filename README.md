@@ -2,7 +2,7 @@
 
 A fast, responsive Asteroids-style arcade game built with plain HTML5 Canvas, CSS, and JavaScript. It has no runtime dependencies.
 
-The playfield scrolls as the ship approaches an edge. Camera speed ramps up with edge proximity and smoothly settles when thrust is released, replacing classic screen-edge teleporting.
+The playfield scrolls as the ship approaches an edge. Camera speed ramps up with edge proximity, overtakes the ship before it reaches the border, and smoothly settles when thrust is released—replacing classic screen-edge teleporting.
 
 ## Play locally
 
