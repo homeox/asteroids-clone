@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#050711">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Star Drift</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="game-shell">
+    <canvas id="game" aria-label="Star Drift arcade game"></canvas>
+
+    <header class="hud" aria-live="polite">
+      <section class="hud-block">
+        <span class="hud-label">SCORE</span>
+        <strong id="score">000000</strong>
+      </section>
+      <section class="hud-title" aria-hidden="true">STAR <i>DRIFT</i></section>
+      <section class="hud-block hud-right">
+        <span class="hud-label">BEST</span>
+        <strong id="high-score">000000</strong>
+      </section>
+    </header>
+
+    <div class="status-row">
+      <div id="lives" class="lives" aria-label="3 lives"></div>
+      <div id="wave" class="wave">SECTOR 01</div>
+    </div>
+
+    <section id="start-panel" class="panel visible">
+      <p class="eyebrow">DEEP SPACE // 2086</p>
+      <h1>STAR<br><span>DRIFT</span></h1>
+      <p class="tagline">Clear the field. Stay moving.<br>Chase the signal.</p>
+      <button id="start-button" class="primary-button">LAUNCH</button>
+      <div class="instructions">
+        <span><kbd>←</kbd><kbd>→</kbd> TURN</span>
+        <span><kbd>↑</kbd> THRUST</span>
+        <span><kbd>SPACE</kbd> FIRE</span>
+      </div>
+    </section>
+
+    <section id="game-over-panel" class="panel">
+      <p class="eyebrow">SIGNAL LOST</p>
+      <h2>DRIFT<br>ENDED</h2>
+      <p class="final-score">SCORE <strong id="final-score">0</strong></p>
+      <p id="new-best" class="new-best">NEW PERSONAL BEST</p>
+      <button id="restart-button" class="primary-button">RELAUNCH</button>
+    </section>
+
+    <button id="pause-button" class="icon-button" aria-label="Pause game">Ⅱ</button>
+    <div id="pause-label" class="pause-label">PAUSED</div>
+
+    <nav id="touch-controls" class="touch-controls" aria-label="Touch controls">
+      <div class="turn-controls">
+        <button data-control="left" aria-label="Turn left">‹</button>
+        <button data-control="right" aria-label="Turn right">›</button>
+      </div>
+      <div class="action-controls">
+        <button data-control="thrust" class="thrust-button" aria-label="Thrust">▲</button>
+        <button data-control="fire" class="fire-button" aria-label="Fire">●</button>
+      </div>
+    </nav>
+  </main>
+  <script src="game.js"></script>
+</body>
+</html>
