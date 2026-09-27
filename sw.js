@@ -1,5 +1,5 @@
-const CACHE = 'star-drift-v7';
-const ASSETS = ['./', './index.html', './styles.css', './game.js', './manifest.webmanifest', './icon.svg'];
+const CACHE = 'star-drift-v9';
+const ASSETS = ['./', './index.html', './styles.css', './tuning.js', './game.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => event.waitUntil(
   caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())

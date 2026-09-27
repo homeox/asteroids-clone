@@ -166,6 +166,25 @@ kbd { min-width: 22px; padding: 5px 6px; border: 1px solid #354b5b; border-radiu
 }
 .pause-label.visible { display: block; }
 
+.dev-panel {
+  display: none;
+  position: absolute;
+  z-index: 8;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  max-width: min(460px, calc(100vw - 100px));
+  padding: 9px 12px;
+  border-left: 2px solid var(--hot);
+  color: #8da8ba;
+  background: rgba(3, 7, 15, .78);
+  font-size: 8px;
+  line-height: 1.55;
+  letter-spacing: .08em;
+  pointer-events: none;
+}
+.dev-panel.visible { display: flex; gap: 11px; }
+.dev-panel strong { color: var(--hot); letter-spacing: .2em; }
+
 .touch-controls { display: none; }
 
 @media (pointer: coarse), (max-width: 760px) {

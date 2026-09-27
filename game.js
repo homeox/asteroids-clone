@@ -13,6 +13,14 @@
   const newBestEl = document.querySelector('#new-best');
   const pauseButton = document.querySelector('#pause-button');
   const pauseLabel = document.querySelector('#pause-label');
+  const devPanel = document.querySelector('#dev-panel');
+  const devSummary = document.querySelector('#dev-summary');
+
+  const TUNING = window.STAR_DRIFT_TUNING || {
+    dev: { unlocked: false, startWave: 1, preset: 'standard' },
+    features: { hostiles: true, hugeAsteroids: true, volatileAsteroids: true, comets: true, enemyBases: true },
+    balance: { enemyStartWave: 1, baseStartWave: 3, cometStartWave: 1, asteroidDensity: 1, enemyFrequency: 1, cometFrequency: 1, baseFrequency: 1, playerDamage: 1 }
+  };
 
   const TAU = Math.PI * 2;
   const ROCK_PALETTES = [
@@ -28,15 +36,21 @@
     width: 0, height: 0, dpr: 1, running: false, paused: false,
     score: 0, high: Number(localStorage.getItem('star-drift-best') || 0),
     lives: 3, wave: 1, lastTime: 0, shake: 0, flash: 0,
-    ship: null, rocks: [], bullets: [], enemyBullets: [], debris: [], enemies: [], comets: [], particles: [], stars: [],
+    ship: null, rocks: [], bullets: [], enemyBullets: [], debris: [], enemies: [], bases: [], comets: [], particles: [], stars: [],
     keys: { left: false, right: false, thrust: false, fire: false },
-    camera: { vx: 0, vy: 0 }, nextShot: 0, rockTimer: 5, enemyTimer: 12, cometTimer: 14,
-    elapsed: 0, enemyAlert: 0, cometAlert: 0, audio: null
+    camera: { vx: 0, vy: 0 }, nextShot: 0, shotSide: 1, rockTimer: 5, enemyTimer: 12, cometTimer: 14, baseTimer: 24,
+    elapsed: 0, enemyAlert: 0, cometAlert: 0, baseAlert: 0, audio: null, engineSound: null
   };
 
   const random = (min, max) => min + Math.random() * (max - min);
   const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+  if (TUNING.dev.unlocked) {
+    const enabled = Object.entries(TUNING.features).filter(([, value]) => value).map(([key]) => key).join(' · ');
+    devSummary.textContent = `SECTOR ${TUNING.dev.startWave} // ${TUNING.dev.preset.toUpperCase()} // ${enabled}`;
+    devPanel.classList.add('visible');
+  }
 
   function wrapStar(star) {
     if (star.x < 0) star.x += state.width;
@@ -97,6 +111,7 @@
     for (const bullet of state.enemyBullets) { bullet.x -= dx; bullet.y -= dy; }
     for (const shard of state.debris) { shard.x -= dx; shard.y -= dy; }
     for (const enemy of state.enemies) { enemy.x -= dx; enemy.y -= dy; }
+    for (const base of state.bases) { base.x -= dx; base.y -= dy; }
     for (const comet of state.comets) { comet.x -= dx; comet.y -= dy; }
     for (const particle of state.particles) { particle.x -= dx; particle.y -= dy; }
     for (const star of state.stars) {
@@ -151,7 +166,8 @@
     const points = Math.floor(random(size === 4 ? 11 : 8, size === 4 ? 16 : 13));
     const craterCount = Math.floor(random(1, size + 3));
     const explosiveChance = Math.min(.28, .1 + state.wave * .018);
-    const explosive = size >= 2 && (explosiveOverride == null ? Math.random() < explosiveChance : explosiveOverride);
+    const explosive = TUNING.features.volatileAsteroids && size >= 2 &&
+      (explosiveOverride == null ? Math.random() < explosiveChance : explosiveOverride);
     const palette = explosive ? VOLATILE_PALETTE : ROCK_PALETTES[Math.floor(Math.random() * ROCK_PALETTES.length)];
     return {
       ...pos, size, radius, angle: random(0, TAU), spin: random(-.65, .65),
@@ -180,6 +196,17 @@
     };
   }
 
+  function makeEnemyBase() {
+    const pos = safeRockPosition();
+    const angle = state.ship ? Math.atan2(state.ship.y - pos.y, state.ship.x - pos.x) : random(0, TAU);
+    const health = Math.min(22, 8 + state.wave * 2);
+    return {
+      ...pos, vx: Math.cos(angle) * 32, vy: Math.sin(angle) * 32,
+      radius: random(43, 54), health, maxHealth: health, rotation: random(0, TAU),
+      spin: random(-.28, .28), shootTimer: random(1.2, 2.2), spawnTimer: random(3.5, 5.5), age: 0, phase: random(0, TAU)
+    };
+  }
+
   function makeComet() {
     const horizontal = Math.random() < .58;
     const fromStart = Math.random() < .5;
@@ -203,11 +230,14 @@
 
   function beginGame() {
     unlockAudio();
-    state.score = 0; state.lives = 3; state.wave = 1; state.running = true; state.paused = false;
+    state.score = 0; state.lives = 3; state.wave = TUNING.dev.startWave; state.running = true; state.paused = false;
     state.camera.vx = 0; state.camera.vy = 0;
-    state.elapsed = 0; state.rockTimer = 5; state.enemyTimer = random(5.5, 8); state.cometTimer = random(10, 15);
-    state.enemyAlert = 0; state.cometAlert = 0;
-    state.bullets = []; state.enemyBullets = []; state.debris = []; state.enemies = []; state.comets = [];
+    state.elapsed = 0; state.rockTimer = 5;
+    state.enemyTimer = random(5.5, 8) / TUNING.balance.enemyFrequency;
+    state.cometTimer = random(10, 15) / TUNING.balance.cometFrequency;
+    state.baseTimer = random(16, 24) / TUNING.balance.baseFrequency;
+    state.enemyAlert = 0; state.cometAlert = 0; state.baseAlert = 0;
+    state.bullets = []; state.enemyBullets = []; state.debris = []; state.enemies = []; state.bases = []; state.comets = [];
     state.particles = []; state.rocks = []; state.ship = makeShip();
     startPanel.classList.remove('visible'); overPanel.classList.remove('visible'); pauseLabel.classList.remove('visible');
     spawnWave(); updateHud(); state.lastTime = performance.now();
@@ -215,31 +245,43 @@
 
   function spawnWave() {
     state.rocks = [];
-    const count = Math.min(4 + Math.floor(state.wave * 1.45), 18);
+    const count = Math.min(28, Math.max(1, Math.round((4 + state.wave * 1.45) * TUNING.balance.asteroidDensity)));
     for (let i = 0; i < count; i++) {
       const colossalChance = Math.min(.34, .1 + state.wave * .035);
-      const size = Math.random() < colossalChance ? 4 : 3;
-      state.rocks.push(makeRock(undefined, undefined, size, i === 0 ? true : null));
+      const size = TUNING.features.hugeAsteroids && Math.random() < colossalChance ? 4 : 3;
+      const forceVolatile = TUNING.features.volatileAsteroids && i === 0;
+      state.rocks.push(makeRock(undefined, undefined, size, forceVolatile ? true : null));
     }
     state.rockTimer = Math.max(1.25, 5.4 - state.wave * .32) + random(0, 1.4);
     state.ship.invulnerable = Math.max(state.ship.invulnerable, 1.8);
     waveEl.textContent = `SECTOR ${String(state.wave).padStart(2, '0')}`;
-    tone(280, .12, 'sine', .04);
-    setTimeout(() => tone(420, .16, 'sine', .035), 110);
+    soundWaveStart();
   }
 
   function shoot(now) {
     if (!state.ship || state.ship.dead || now < state.nextShot) return;
     const s = state.ship;
     const speed = 570;
+    const side = state.shotSide;
+    const sideX = Math.cos(s.angle + Math.PI / 2) * side * 5;
+    const sideY = Math.sin(s.angle + Math.PI / 2) * side * 5;
     state.bullets.push({
-      x: s.x + Math.cos(s.angle) * 29, y: s.y + Math.sin(s.angle) * 29,
+      x: s.x + Math.cos(s.angle) * 27 + sideX, y: s.y + Math.sin(s.angle) * 27 + sideY,
       vx: s.vx + Math.cos(s.angle) * speed, vy: s.vy + Math.sin(s.angle) * speed,
-      life: .82, radius: 2.2
+      angle: s.angle, life: .9, radius: 2.7
     });
+    state.shotSide *= -1;
     state.nextShot = now + 145;
     s.vx -= Math.cos(s.angle) * 3; s.vy -= Math.sin(s.angle) * 3;
-    tone(random(620, 760), .055, 'square', .022, 220);
+    for (let i = 0; i < 3; i++) {
+      state.particles.push({
+        x: s.x + Math.cos(s.angle) * 25 + sideX, y: s.y + Math.sin(s.angle) * 25 + sideY,
+        vx: Math.cos(s.angle + random(-.25, .25)) * random(70, 150),
+        vy: Math.sin(s.angle + random(-.25, .25)) * random(70, 150),
+        life: random(.08, .18), maxLife: .18, size: random(1, 2.5), color: '#dffcff'
+      });
+    }
+    soundPlayerShot();
   }
 
   function addParticles(x, y, color, amount, speed = 120) {
@@ -260,12 +302,13 @@
     const aimX = state.ship.x + state.ship.vx * travelTime * .32;
     const aimY = state.ship.y + state.ship.vy * travelTime * .32;
     const angle = Math.atan2(aimY - enemy.y, aimX - enemy.x) + random(-.055, .055);
+    const muzzle = (enemy.radius || 18) + 3;
     state.enemyBullets.push({
-      x: enemy.x + Math.cos(angle) * 21, y: enemy.y + Math.sin(angle) * 21,
+      x: enemy.x + Math.cos(angle) * muzzle, y: enemy.y + Math.sin(angle) * muzzle,
       vx: Math.cos(angle) * bulletSpeed, vy: Math.sin(angle) * bulletSpeed,
       angle, life: 4.5, radius: 4
     });
-    tone(random(185, 225), .12, 'square', .026, 105);
+    soundEnemyShot();
   }
 
   function damageEnemy(index, x, y) {
@@ -273,16 +316,34 @@
     enemy.health--;
     addParticles(x, y, '#ff9b54', 7, 105);
     state.shake = Math.max(state.shake, 2.5);
-    tone(260, .07, 'sawtooth', .028, 130);
+    soundImpact(1);
     if (enemy.health <= 0) {
       state.score += 300 + state.wave * 25;
       if (state.score > state.high) state.high = state.score;
       addParticles(enemy.x, enemy.y, '#ff4d8d', 24, 230);
       addParticles(enemy.x, enemy.y, '#67e8f9', 12, 160);
       state.shake = Math.max(state.shake, 9);
-      tone(105, .38, 'sawtooth', .06, 38);
+      soundExplosion(1.15, true);
       state.enemies.splice(index, 1);
       updateHud();
+    }
+  }
+
+  function damageBase(index, x, y) {
+    const base = state.bases[index];
+    base.health--;
+    addParticles(x, y, '#ff9b54', 8, 115);
+    state.shake = Math.max(state.shake, 3.5);
+    soundImpact(1.25);
+    if (base.health <= 0) {
+      state.score += 1000 + state.wave * 75;
+      if (state.score > state.high) state.high = state.score;
+      addParticles(base.x, base.y, '#ff4d8d', 46, 330);
+      addParticles(base.x, base.y, '#ffcf6e', 32, 260);
+      addParticles(base.x, base.y, '#67e8f9', 18, 190);
+      state.shake = Math.max(state.shake, 18); state.flash = Math.max(state.flash, .22);
+      soundExplosion(1.8, true);
+      state.bases.splice(index, 1); updateHud();
     }
   }
 
@@ -302,7 +363,7 @@
     addParticles(rock.x, rock.y, '#ff553d', 34, 290);
     addParticles(rock.x, rock.y, '#ffcf6e', 20, 210);
     state.shake = Math.max(state.shake, 14); state.flash = Math.max(state.flash, .14);
-    tone(72, .48, 'sawtooth', .075, 28);
+    soundExplosion(1.45, true);
   }
 
   function splitRock(index, hitX, hitY) {
@@ -313,12 +374,17 @@
     if (state.score > state.high) state.high = state.score;
     addParticles(hitX, hitY, '#67e8f9', 7 + rock.size * 3, 100 + rock.size * 35);
     state.shake = Math.max(state.shake, rock.size * 2.2);
-    tone(150 + (3 - rock.size) * 90, .11, 'sawtooth', .035, 70);
+    if (!rock.explosive) soundRockBreak(rock.size);
     if (rock.explosive) detonateRock(rock);
     if (rock.size > 1) {
-      for (let i = 0; i < 2; i++) {
-        const child = makeRock(rock.x, rock.y, rock.size - 1, false);
-        child.vx += rock.vx * .35; child.vy += rock.vy * .35;
+      const childCount = rock.explosive ? 4 + rock.size : 2;
+      const childSize = rock.explosive ? Math.max(1, rock.size - 2) : rock.size - 1;
+      for (let i = 0; i < childCount; i++) {
+        const child = makeRock(rock.x, rock.y, childSize, false);
+        const burstAngle = rock.explosive ? i / childCount * TAU + random(-.18, .18) : random(0, TAU);
+        const burstSpeed = rock.explosive ? random(145, 260) : random(20, 55);
+        child.vx = rock.vx * .25 + Math.cos(burstAngle) * burstSpeed;
+        child.vy = rock.vy * .25 + Math.sin(burstAngle) * burstSpeed;
         state.rocks.push(child);
       }
     }
@@ -327,14 +393,14 @@
 
   function hitShip() {
     const ship = state.ship;
-    if (!ship || ship.invulnerable > 0 || ship.dead) return;
+    if (!ship || ship.invulnerable > 0 || ship.dead || TUNING.balance.playerDamage === 0) return;
     ship.dead = true;
     state.camera.vx = 0; state.camera.vy = 0;
     state.lives--;
     addParticles(ship.x, ship.y, '#ff4d8d', 28, 240);
     addParticles(ship.x, ship.y, '#edf7ff', 12, 150);
     state.shake = 13; state.flash = .18;
-    tone(90, .5, 'sawtooth', .07, 30);
+    soundPlayerHit();
     updateHud();
     setTimeout(() => {
       if (!state.running) return;
@@ -345,6 +411,7 @@
 
   function endGame() {
     state.running = false;
+    setEngineSound(false, 0);
     const oldBest = Number(localStorage.getItem('star-drift-best') || 0);
     if (state.high > oldBest) localStorage.setItem('star-drift-best', String(state.high));
     finalScoreEl.textContent = state.score.toLocaleString();
@@ -358,6 +425,7 @@
     state.elapsed += dt;
     state.enemyAlert = Math.max(0, state.enemyAlert - dt);
     state.cometAlert = Math.max(0, state.cometAlert - dt);
+    state.baseAlert = Math.max(0, state.baseAlert - dt);
     const ship = state.ship;
     if (ship && !ship.dead) {
       const turn = (state.keys.left ? -1 : 0) + (state.keys.right ? 1 : 0);
@@ -365,17 +433,22 @@
       if (state.keys.thrust) {
         ship.vx += Math.cos(ship.angle) * 215 * dt;
         ship.vy += Math.sin(ship.angle) * 215 * dt;
-        if (Math.random() < .75) {
-          const back = ship.angle + Math.PI + random(-.22, .22);
-          state.particles.push({ x: ship.x - Math.cos(ship.angle) * 14, y: ship.y - Math.sin(ship.angle) * 14,
-            vx: ship.vx * .15 + Math.cos(back) * random(60, 145), vy: ship.vy * .15 + Math.sin(back) * random(60, 145),
-            life: random(.15, .35), maxLife: .35, size: random(1, 2.8), color: Math.random() < .5 ? '#67e8f9' : '#ff4d8d' });
+        for (const exhaustSide of [-1, 1]) {
+          if (Math.random() < .72) {
+            const back = ship.angle + Math.PI + random(-.18, .18);
+            const sideX = Math.cos(ship.angle + Math.PI / 2) * exhaustSide * 3.4;
+            const sideY = Math.sin(ship.angle + Math.PI / 2) * exhaustSide * 3.4;
+            state.particles.push({ x: ship.x - Math.cos(ship.angle) * 14 + sideX, y: ship.y - Math.sin(ship.angle) * 14 + sideY,
+              vx: ship.vx * .12 + Math.cos(back) * random(85, 185), vy: ship.vy * .12 + Math.sin(back) * random(85, 185),
+              life: random(.18, .42), maxLife: .42, size: random(1.2, 3.2), color: Math.random() < .58 ? '#67e8f9' : '#ff4d8d' });
+          }
         }
       }
       if (state.keys.fire) shoot(now);
       const drag = Math.pow(state.keys.thrust ? .988 : .94, dt * 60);
       ship.vx *= drag; ship.vy *= drag;
       const maxSpeed = 400, speed = Math.hypot(ship.vx, ship.vy);
+      setEngineSound(state.keys.thrust, speed / maxSpeed);
       if (speed > maxSpeed) { ship.vx *= maxSpeed / speed; ship.vy *= maxSpeed / speed; }
       ship.x += ship.vx * dt; ship.y += ship.vy * dt;
       scrollScene(dt, ship);
@@ -395,7 +468,7 @@
         state.camera.vy = Math.max(state.camera.vy, ship.vy * 1.35);
       }
       ship.invulnerable = Math.max(0, ship.invulnerable - dt);
-    }
+    } else setEngineSound(false, 0);
 
     for (let i = state.bullets.length - 1; i >= 0; i--) {
       const b = state.bullets[i]; b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
@@ -406,6 +479,12 @@
       for (let j = state.enemies.length - 1; j >= 0; j--) {
         if (distance(b, state.enemies[j]) < state.enemies[j].radius + b.radius) {
           damageEnemy(j, b.x, b.y); state.bullets.splice(i, 1); spent = true; break;
+        }
+      }
+      if (spent) continue;
+      for (let j = state.bases.length - 1; j >= 0; j--) {
+        if (distance(b, state.bases[j]) < state.bases[j].radius + b.radius) {
+          damageBase(j, b.x, b.y); state.bullets.splice(i, 1); spent = true; break;
         }
       }
       if (spent) continue;
@@ -447,6 +526,28 @@
       enemy.x += enemy.vx * dt; enemy.y += enemy.vy * dt;
       if (enemy.age > 34 || enemy.x < -380 || enemy.x > state.width + 380 || enemy.y < -380 || enemy.y > state.height + 380) {
         state.enemies.splice(i, 1);
+      }
+    }
+
+    for (let i = state.bases.length - 1; i >= 0; i--) {
+      const base = state.bases[i];
+      base.age += dt; base.rotation += base.spin * dt; base.phase += dt * 1.4;
+      base.shootTimer -= dt; base.spawnTimer -= dt;
+      const inside = base.x > 90 && base.x < state.width - 90 && base.y > 110 && base.y < state.height - 90;
+      if (inside) { base.vx *= Math.pow(.97, dt * 60); base.vy *= Math.pow(.97, dt * 60); }
+      base.x += base.vx * dt; base.y += base.vy * dt;
+      if (ship && !ship.dead) {
+        const d = distance(base, ship);
+        if (base.shootTimer <= 0 && d < Math.max(820, state.width * .9)) {
+          fireEnemy(base); base.shootTimer = random(1.5, 2.4);
+        }
+        if (base.spawnTimer <= 0 && TUNING.features.hostiles && state.enemies.length < Math.min(4, 1 + Math.floor(state.wave / 3))) {
+          const defender = makeEnemy();
+          defender.x = base.x; defender.y = base.y;
+          defender.vx = Math.cos(defender.angle) * 120; defender.vy = Math.sin(defender.angle) * 120;
+          state.enemies.push(defender); base.spawnTimer = random(4.5, 7);
+        }
+        if (d < base.radius + ship.radius * .72 && ship.invulnerable <= 0) hitShip();
       }
     }
 
@@ -503,24 +604,28 @@
     state.rockTimer -= dt;
     const rockCap = Math.min(24, 7 + state.wave * 2);
     if (state.wave > 1 && state.rocks.length > 0 && state.rocks.length < rockCap && state.rockTimer <= 0) {
-      const reinforcementSize = state.wave >= 3 && Math.random() < .2 ? 4 : (Math.random() < .72 ? 3 : 2);
+      const reinforcementSize = TUNING.features.hugeAsteroids && state.wave >= 3 && Math.random() < .2 ? 4 : (Math.random() < .72 ? 3 : 2);
       state.rocks.push(makeRock(undefined, undefined, reinforcementSize));
       state.rockTimer = Math.max(1.05, 5.2 - state.wave * .34) + random(0, 1.1);
     }
     state.enemyTimer -= dt;
     const enemyCap = Math.min(3, 1 + Math.floor(state.wave / 5));
-    if (state.enemyTimer <= 0 && state.enemies.length < enemyCap) {
+    if (TUNING.features.hostiles && state.wave >= TUNING.balance.enemyStartWave && state.enemyTimer <= 0 && state.enemies.length < enemyCap) {
       state.enemies.push(makeEnemy()); state.enemyAlert = 2.4;
-      state.enemyTimer = Math.max(6.5, 14.5 - state.wave * .6) + random(1.5, 4);
-      tone(165, .18, 'square', .035, 105);
-      setTimeout(() => tone(125, .22, 'square', .03, 75), 150);
+      state.enemyTimer = (Math.max(6.5, 14.5 - state.wave * .6) + random(1.5, 4)) / TUNING.balance.enemyFrequency;
+      soundHostileAlert();
     }
     state.cometTimer -= dt;
-    if (state.cometTimer <= 0 && state.comets.length === 0) {
+    if (TUNING.features.comets && state.wave >= TUNING.balance.cometStartWave && state.cometTimer <= 0 && state.comets.length === 0) {
       state.comets.push(makeComet()); state.cometAlert = 2.2;
-      state.cometTimer = Math.max(8, 19 - state.wave * .55) + random(3, 8);
-      tone(95, .65, 'sawtooth', .045, 42);
-      setTimeout(() => tone(58, .75, 'sawtooth', .035, 30), 180);
+      state.cometTimer = (Math.max(8, 19 - state.wave * .55) + random(3, 8)) / TUNING.balance.cometFrequency;
+      soundComet();
+    }
+    state.baseTimer -= dt;
+    if (TUNING.features.enemyBases && state.wave >= TUNING.balance.baseStartWave && state.baseTimer <= 0 && state.bases.length === 0) {
+      state.bases.push(makeEnemyBase()); state.baseAlert = 3;
+      state.baseTimer = random(28, 42) / TUNING.balance.baseFrequency;
+      soundBaseAlert();
     }
     if (state.rocks.length === 0 && ship && !ship.dead) { state.wave++; spawnWave(); }
   }
@@ -560,9 +665,13 @@
     if (state.keys.thrust) {
       const flameLength = random(17, 28);
       ctx.globalAlpha = pulse; ctx.fillStyle = '#ff4d8d'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 14;
-      ctx.beginPath(); ctx.moveTo(-11, -4.5); ctx.lineTo(-11 - flameLength, 0); ctx.lineTo(-11, 4.5); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = '#dffcff'; ctx.shadowColor = '#67e8f9';
-      ctx.beginPath(); ctx.moveTo(-10, -2.2); ctx.lineTo(-19 - flameLength * .45, 0); ctx.lineTo(-10, 2.2); ctx.closePath(); ctx.fill();
+      for (const side of [-1, 1]) {
+        const y = side * 3.2;
+        ctx.beginPath(); ctx.moveTo(-10, y - 2.2); ctx.lineTo(-10 - flameLength, y); ctx.lineTo(-10, y + 2.2); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#dffcff'; ctx.shadowColor = '#67e8f9';
+        ctx.beginPath(); ctx.moveTo(-9, y - 1.1); ctx.lineTo(-17 - flameLength * .42, y); ctx.lineTo(-9, y + 1.1); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#ff4d8d'; ctx.shadowColor = '#ff4d8d';
+      }
       ctx.globalAlpha = 1;
     } else {
       ctx.globalAlpha = pulse * .7; ctx.fillStyle = '#67e8f9'; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 8;
@@ -620,6 +729,37 @@
     ctx.save(); ctx.translate(x, y); ctx.rotate(angle); ctx.globalAlpha = pulse;
     ctx.fillStyle = '#ff4d8d'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 12;
     ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-7, -7); ctx.lineTo(-4, 0); ctx.lineTo(-7, 7); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBase(base, time) {
+    const pulse = .72 + Math.sin(time * .009 + base.phase) * .22;
+    ctx.save(); ctx.translate(base.x, base.y); ctx.rotate(base.rotation);
+    ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 18;
+    ctx.fillStyle = '#210f21'; ctx.strokeStyle = '#ff7baa'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 12; i++) {
+      const angle = i / 12 * TAU;
+      const radius = base.radius * (i % 2 ? .72 : 1);
+      const x = Math.cos(angle) * radius, y = Math.sin(angle) * radius;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,155,84,.65)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, base.radius * .58, 0, TAU); ctx.stroke();
+    ctx.save(); ctx.rotate(-base.rotation * 2.4);
+    ctx.strokeStyle = 'rgba(103,232,249,.6)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, base.radius * .38, 0, Math.PI * 1.45); ctx.stroke(); ctx.restore();
+    ctx.globalAlpha = pulse; ctx.fillStyle = '#ffcf6e'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(0, 0, base.radius * .2, 0, TAU); ctx.fill(); ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    for (let i = 0; i < 4; i++) {
+      const angle = i / 4 * TAU;
+      ctx.save(); ctx.rotate(angle); ctx.fillStyle = '#6a234a'; ctx.strokeStyle = '#ff9b72';
+      ctx.fillRect(base.radius * .42, -3, base.radius * .34, 6); ctx.strokeRect(base.radius * .42, -3, base.radius * .34, 6); ctx.restore();
+    }
+    const barWidth = base.radius * 1.55;
+    ctx.fillStyle = 'rgba(2,4,8,.82)'; ctx.fillRect(-barWidth / 2, -base.radius - 11, barWidth, 5);
+    ctx.fillStyle = '#ff4d8d'; ctx.fillRect(-barWidth / 2, -base.radius - 11, barWidth * base.health / base.maxHealth, 5);
     ctx.restore();
   }
 
@@ -710,10 +850,13 @@
     if (state.shake) ctx.translate(random(-state.shake, state.shake), random(-state.shake, state.shake));
     for (const comet of state.comets) drawComet(comet);
     for (const rock of state.rocks) drawRock(rock);
+    for (const base of state.bases) drawBase(base, time);
     for (const enemy of state.enemies) drawEnemy(enemy, time);
     for (const b of state.bullets) {
-      ctx.fillStyle = '#fff'; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, TAU); ctx.fill();
+      const speed = Math.max(1, Math.hypot(b.vx, b.vy));
+      ctx.strokeStyle = 'rgba(103,232,249,.62)'; ctx.lineWidth = 4; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 15;
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx / speed * 16, b.y - b.vy / speed * 16); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, TAU); ctx.fill();
     }
     for (const b of state.enemyBullets) {
       const speed = Math.max(1, Math.hypot(b.vx, b.vy));
@@ -729,6 +872,7 @@
     }
     ctx.globalAlpha = 1; drawShip(state.ship, time);
     for (const enemy of state.enemies) drawEnemyIndicator(enemy, time);
+    for (const base of state.bases) drawEnemyIndicator(base, time);
     ctx.restore();
 
     if (state.flash > 0) { ctx.fillStyle = `rgba(255,77,141,${state.flash * 1.5})`; ctx.fillRect(0, 0, state.width, state.height); }
@@ -742,6 +886,12 @@
       const alpha = Math.min(1, state.cometAlert * 1.5) * (.72 + Math.sin(time * .026) * .28);
       ctx.globalAlpha = alpha; ctx.fillStyle = '#ffb05c'; ctx.textAlign = 'center';
       ctx.font = '700 11px "Space Mono", monospace'; ctx.fillText('☄  COMET INBOUND  ☄', state.width / 2, state.enemyAlert > 0 ? 92 : 74);
+      ctx.globalAlpha = 1; ctx.textAlign = 'start';
+    }
+    if (state.baseAlert > 0) {
+      const alpha = Math.min(1, state.baseAlert) * (.74 + Math.sin(time * .018) * .26);
+      ctx.globalAlpha = alpha; ctx.fillStyle = '#ff7baa'; ctx.textAlign = 'center';
+      ctx.font = '700 11px "Space Mono", monospace'; ctx.fillText('◆  ENEMY BASE DETECTED  ◆', state.width / 2, 110);
       ctx.globalAlpha = 1; ctx.textAlign = 'start';
     }
     ctx.fillStyle = 'rgba(103,232,249,.045)'; ctx.fillRect(0, 0, state.width, 1); ctx.fillRect(0, state.height - 1, state.width, 1);
@@ -764,6 +914,7 @@
   function togglePause() {
     if (!state.running) return;
     state.paused = !state.paused; pauseLabel.classList.toggle('visible', state.paused);
+    if (state.paused) setEngineSound(false, 0);
     pauseButton.textContent = state.paused ? '▶' : 'Ⅱ';
     if (!state.paused) state.lastTime = performance.now();
   }
@@ -779,6 +930,81 @@
     osc.type = type; osc.frequency.setValueAtTime(frequency, t); osc.frequency.exponentialRampToValueAtTime(Math.max(20, endFrequency), t + duration);
     gain.gain.setValueAtTime(volume, t); gain.gain.exponentialRampToValueAtTime(.0001, t + duration);
     osc.connect(gain).connect(state.audio.destination); osc.start(t); osc.stop(t + duration);
+  }
+
+  function soundPlayerShot() {
+    tone(random(760, 880), .075, 'square', .025, 260);
+    tone(random(1180, 1320), .045, 'sine', .018, 520);
+  }
+
+  function soundEnemyShot() {
+    tone(random(180, 230), .15, 'square', .03, 82);
+    tone(random(410, 480), .09, 'sawtooth', .018, 145);
+  }
+
+  function soundImpact(scale = 1) {
+    tone(310 * scale, .07, 'square', .025, 115);
+    tone(140 * scale, .1, 'sawtooth', .022, 55);
+  }
+
+  function soundRockBreak(size) {
+    const weight = clamp(size, 1, 4);
+    tone(260 / weight, .16 + weight * .025, 'sawtooth', .026 + weight * .008, 48);
+    tone(520 / weight, .09, 'square', .018, 110);
+  }
+
+  function soundExplosion(scale = 1, hot = false) {
+    tone(105 / scale, .42 * scale, 'sawtooth', Math.min(.085, .04 * scale), 24);
+    tone((hot ? 340 : 250) / scale, .22 * scale, 'square', Math.min(.055, .025 * scale), 52);
+    setTimeout(() => tone(62, .3 * scale, 'sine', .035, 22), 55);
+  }
+
+  function soundPlayerHit() {
+    tone(125, .55, 'sawtooth', .075, 25);
+    tone(680, .25, 'square', .035, 75);
+  }
+
+  function soundWaveStart() {
+    tone(260, .14, 'sine', .035, 390);
+    setTimeout(() => tone(420, .18, 'sine', .035, 630), 95);
+    setTimeout(() => tone(620, .2, 'triangle', .025, 780), 190);
+  }
+
+  function soundHostileAlert() {
+    tone(170, .16, 'square', .035, 105);
+    setTimeout(() => tone(125, .22, 'square', .03, 72), 140);
+  }
+
+  function soundComet() {
+    tone(110, .72, 'sawtooth', .05, 38);
+    tone(58, .92, 'triangle', .038, 26);
+  }
+
+  function soundBaseAlert() {
+    tone(92, .46, 'square', .045, 44);
+    setTimeout(() => tone(138, .54, 'sawtooth', .035, 56), 190);
+    setTimeout(() => tone(74, .64, 'square', .026, 36), 380);
+  }
+
+  function setEngineSound(active, speedRatio) {
+    if (!state.audio) return;
+    if (!state.engineSound) {
+      const osc = state.audio.createOscillator();
+      const gain = state.audio.createGain();
+      osc.type = 'sawtooth'; osc.frequency.setValueAtTime(48, state.audio.currentTime);
+      gain.gain.setValueAtTime(.0001, state.audio.currentTime);
+      osc.connect(gain).connect(state.audio.destination); osc.start();
+      state.engineSound = { osc, gain };
+    }
+    const now = state.audio.currentTime;
+    const targetGain = active ? .014 + clamp(speedRatio, 0, 1) * .018 : .0001;
+    const targetFrequency = active ? 58 + clamp(speedRatio, 0, 1) * 48 : 44;
+    const setParam = (param, value, time) => {
+      if (param.setTargetAtTime) param.setTargetAtTime(value, time, .045);
+      else param.setValueAtTime(value, time);
+    };
+    setParam(state.engineSound.gain.gain, targetGain, now);
+    setParam(state.engineSound.osc.frequency, targetFrequency, now);
   }
 
   const keyMap = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right', ArrowUp: 'thrust', KeyW: 'thrust', Space: 'fire' };
