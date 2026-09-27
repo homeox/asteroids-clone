@@ -19,16 +19,19 @@
     { light: '#8097aa', base: '#40586b', dark: '#1c2b3b', edge: '#b8d0df', dust: '#d4e1e7' },
     { light: '#947d76', base: '#5a4541', dark: '#2d2225', edge: '#d0b2a8', dust: '#e1c4b8' },
     { light: '#78978d', base: '#405e58', dark: '#1b302f', edge: '#aed0c6', dust: '#cbe0d7' },
-    { light: '#8c789c', base: '#554368', dark: '#2a2138', edge: '#c6add8', dust: '#dac9e5' }
+    { light: '#8c789c', base: '#554368', dark: '#2a2138', edge: '#c6add8', dust: '#dac9e5' },
+    { light: '#a09369', base: '#655b39', dark: '#332d1c', edge: '#d8c999', dust: '#eadfb8' },
+    { light: '#7693a8', base: '#385a73', dark: '#182d42', edge: '#a8d6eb', dust: '#d0ecf5' }
   ];
+  const VOLATILE_PALETTE = { light: '#c86d60', base: '#7c302f', dark: '#35171d', edge: '#ff9b7a', dust: '#ffc18e' };
   const state = {
     width: 0, height: 0, dpr: 1, running: false, paused: false,
     score: 0, high: Number(localStorage.getItem('star-drift-best') || 0),
     lives: 3, wave: 1, lastTime: 0, shake: 0, flash: 0,
-    ship: null, rocks: [], bullets: [], enemyBullets: [], enemies: [], particles: [], stars: [],
+    ship: null, rocks: [], bullets: [], enemyBullets: [], debris: [], enemies: [], comets: [], particles: [], stars: [],
     keys: { left: false, right: false, thrust: false, fire: false },
-    camera: { vx: 0, vy: 0 }, nextShot: 0, rockTimer: 5, enemyTimer: 12,
-    elapsed: 0, enemyAlert: 0, audio: null
+    camera: { vx: 0, vy: 0 }, nextShot: 0, rockTimer: 5, enemyTimer: 12, cometTimer: 14,
+    elapsed: 0, enemyAlert: 0, cometAlert: 0, audio: null
   };
 
   const random = (min, max) => min + Math.random() * (max - min);
@@ -92,7 +95,9 @@
     for (const rock of state.rocks) { rock.x -= dx; rock.y -= dy; }
     for (const bullet of state.bullets) { bullet.x -= dx; bullet.y -= dy; }
     for (const bullet of state.enemyBullets) { bullet.x -= dx; bullet.y -= dy; }
+    for (const shard of state.debris) { shard.x -= dx; shard.y -= dy; }
     for (const enemy of state.enemies) { enemy.x -= dx; enemy.y -= dy; }
+    for (const comet of state.comets) { comet.x -= dx; comet.y -= dy; }
     for (const particle of state.particles) { particle.x -= dx; particle.y -= dy; }
     for (const star of state.stars) {
       star.x -= dx * (.16 + star.depth * .34);
@@ -140,17 +145,19 @@
     return { x, y };
   }
 
-  function makeRock(x, y, size = 3) {
+  function makeRock(x, y, size = 3, explosiveOverride = null) {
     const pos = x == null ? safeRockPosition() : { x, y };
-    const radius = size === 3 ? random(35, 52) : size === 2 ? random(21, 29) : random(10, 16);
-    const points = Math.floor(random(8, 13));
+    const radius = size === 4 ? random(62, 86) : size === 3 ? random(36, 54) : size === 2 ? random(21, 31) : random(10, 17);
+    const points = Math.floor(random(size === 4 ? 11 : 8, size === 4 ? 16 : 13));
     const craterCount = Math.floor(random(1, size + 3));
-    const palette = ROCK_PALETTES[Math.floor(Math.random() * ROCK_PALETTES.length)];
+    const explosiveChance = Math.min(.28, .1 + state.wave * .018);
+    const explosive = size >= 2 && (explosiveOverride == null ? Math.random() < explosiveChance : explosiveOverride);
+    const palette = explosive ? VOLATILE_PALETTE : ROCK_PALETTES[Math.floor(Math.random() * ROCK_PALETTES.length)];
     return {
       ...pos, size, radius, angle: random(0, TAU), spin: random(-.65, .65),
       vx: random(-1, 1) * (48 + state.wave * 3) / Math.sqrt(size),
       vy: random(-1, 1) * (48 + state.wave * 3) / Math.sqrt(size),
-      palette,
+      palette, explosive,
       shape: Array.from({ length: points }, (_, i) => clamp(random(.76, 1.16) + (i % 3 === 0 ? random(-.12, .08) : 0), .64, 1.2)),
       craters: Array.from({ length: craterCount }, () => ({
         angle: random(0, TAU), distance: random(.08, .5), radius: random(.09, .2),
@@ -173,12 +180,35 @@
     };
   }
 
+  function makeComet() {
+    const horizontal = Math.random() < .58;
+    const fromStart = Math.random() < .5;
+    const speed = random(520, 690) + Math.min(120, state.wave * 9);
+    let x, y, angle;
+    if (horizontal) {
+      x = fromStart ? -90 : state.width + 90;
+      y = random(state.height * .14, state.height * .86);
+      angle = (fromStart ? 0 : Math.PI) + random(-.24, .24);
+    } else {
+      x = random(state.width * .14, state.width * .86);
+      y = fromStart ? -90 : state.height + 90;
+      angle = (fromStart ? Math.PI / 2 : -Math.PI / 2) + random(-.24, .24);
+    }
+    return {
+      x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      angle, radius: random(15, 23), age: 0, spin: random(-3.5, 3.5), rotation: random(0, TAU),
+      hue: Math.random() < .68 ? 'orange' : 'cyan'
+    };
+  }
+
   function beginGame() {
     unlockAudio();
     state.score = 0; state.lives = 3; state.wave = 1; state.running = true; state.paused = false;
     state.camera.vx = 0; state.camera.vy = 0;
-    state.elapsed = 0; state.rockTimer = 5; state.enemyTimer = 11; state.enemyAlert = 0;
-    state.bullets = []; state.enemyBullets = []; state.enemies = []; state.particles = []; state.rocks = []; state.ship = makeShip();
+    state.elapsed = 0; state.rockTimer = 5; state.enemyTimer = random(5.5, 8); state.cometTimer = random(10, 15);
+    state.enemyAlert = 0; state.cometAlert = 0;
+    state.bullets = []; state.enemyBullets = []; state.debris = []; state.enemies = []; state.comets = [];
+    state.particles = []; state.rocks = []; state.ship = makeShip();
     startPanel.classList.remove('visible'); overPanel.classList.remove('visible'); pauseLabel.classList.remove('visible');
     spawnWave(); updateHud(); state.lastTime = performance.now();
   }
@@ -186,7 +216,11 @@
   function spawnWave() {
     state.rocks = [];
     const count = Math.min(4 + Math.floor(state.wave * 1.45), 18);
-    for (let i = 0; i < count; i++) state.rocks.push(makeRock());
+    for (let i = 0; i < count; i++) {
+      const colossalChance = Math.min(.34, .1 + state.wave * .035);
+      const size = Math.random() < colossalChance ? 4 : 3;
+      state.rocks.push(makeRock(undefined, undefined, size, i === 0 ? true : null));
+    }
     state.rockTimer = Math.max(1.25, 5.4 - state.wave * .32) + random(0, 1.4);
     state.ship.invulnerable = Math.max(state.ship.invulnerable, 1.8);
     waveEl.textContent = `SECTOR ${String(state.wave).padStart(2, '0')}`;
@@ -252,18 +286,38 @@
     }
   }
 
+  function detonateRock(rock) {
+    const shardCount = 6 + rock.size * 2;
+    for (let i = 0; i < shardCount; i++) {
+      const angle = i / shardCount * TAU + random(-.16, .16);
+      const speed = random(155, 285) + rock.size * 18;
+      state.debris.push({
+        x: rock.x + Math.cos(angle) * rock.radius * .2,
+        y: rock.y + Math.sin(angle) * rock.radius * .2,
+        vx: rock.vx * .25 + Math.cos(angle) * speed,
+        vy: rock.vy * .25 + Math.sin(angle) * speed,
+        angle, spin: random(-8, 8), radius: random(3.5, 6.5), life: random(2.2, 3.6)
+      });
+    }
+    addParticles(rock.x, rock.y, '#ff553d', 34, 290);
+    addParticles(rock.x, rock.y, '#ffcf6e', 20, 210);
+    state.shake = Math.max(state.shake, 14); state.flash = Math.max(state.flash, .14);
+    tone(72, .48, 'sawtooth', .075, 28);
+  }
+
   function splitRock(index, hitX, hitY) {
     const rock = state.rocks[index];
     state.rocks.splice(index, 1);
-    const value = rock.size === 3 ? 20 : rock.size === 2 ? 50 : 100;
+    const value = rock.size === 4 ? 35 : rock.size === 3 ? 55 : rock.size === 2 ? 90 : 140;
     state.score += value;
     if (state.score > state.high) state.high = state.score;
     addParticles(hitX, hitY, '#67e8f9', 7 + rock.size * 3, 100 + rock.size * 35);
     state.shake = Math.max(state.shake, rock.size * 2.2);
     tone(150 + (3 - rock.size) * 90, .11, 'sawtooth', .035, 70);
+    if (rock.explosive) detonateRock(rock);
     if (rock.size > 1) {
       for (let i = 0; i < 2; i++) {
-        const child = makeRock(rock.x, rock.y, rock.size - 1);
+        const child = makeRock(rock.x, rock.y, rock.size - 1, false);
         child.vx += rock.vx * .35; child.vy += rock.vy * .35;
         state.rocks.push(child);
       }
@@ -303,6 +357,7 @@
     if (!state.running || state.paused) return;
     state.elapsed += dt;
     state.enemyAlert = Math.max(0, state.enemyAlert - dt);
+    state.cometAlert = Math.max(0, state.cometAlert - dt);
     const ship = state.ship;
     if (ship && !ship.dead) {
       const turn = (state.keys.left ? -1 : 0) + (state.keys.right ? 1 : 0);
@@ -406,6 +461,40 @@
       }
     }
 
+    for (let i = state.debris.length - 1; i >= 0; i--) {
+      const shard = state.debris[i];
+      shard.x += shard.vx * dt; shard.y += shard.vy * dt; shard.angle += shard.spin * dt; shard.life -= dt;
+      shard.vx *= Math.pow(.996, dt * 60); shard.vy *= Math.pow(.996, dt * 60);
+      if (shard.life <= 0 || shard.x < -100 || shard.x > state.width + 100 || shard.y < -100 || shard.y > state.height + 100) {
+        state.debris.splice(i, 1); continue;
+      }
+      if (ship && !ship.dead && ship.invulnerable <= 0 && distance(shard, ship) < shard.radius + ship.radius * .7) {
+        state.debris.splice(i, 1); hitShip();
+      }
+    }
+
+    for (let i = state.comets.length - 1; i >= 0; i--) {
+      const comet = state.comets[i];
+      comet.age += dt; comet.rotation += comet.spin * dt;
+      comet.x += comet.vx * dt; comet.y += comet.vy * dt;
+      const trailAngle = Math.atan2(comet.vy, comet.vx) + Math.PI + random(-.13, .13);
+      const trailSpeed = random(65, 170);
+      for (let p = 0; p < 2; p++) {
+        state.particles.push({
+          x: comet.x - Math.cos(comet.angle) * comet.radius, y: comet.y - Math.sin(comet.angle) * comet.radius,
+          vx: Math.cos(trailAngle) * trailSpeed, vy: Math.sin(trailAngle) * trailSpeed,
+          life: random(.35, .8), maxLife: .8, size: random(2, 5.5),
+          color: comet.hue === 'cyan' ? (p ? '#67e8f9' : '#e5fcff') : (p ? '#ff5c3d' : '#ffd36e')
+        });
+      }
+      if (ship && !ship.dead && ship.invulnerable <= 0 && distance(comet, ship) < comet.radius + ship.radius * .72) {
+        hitShip(); addParticles(comet.x, comet.y, '#ffb05c', 24, 240); state.comets.splice(i, 1); continue;
+      }
+      if (comet.age > .7 && (comet.x < -140 || comet.x > state.width + 140 || comet.y < -140 || comet.y > state.height + 140)) {
+        state.comets.splice(i, 1);
+      }
+    }
+
     for (let i = state.particles.length - 1; i >= 0; i--) {
       const p = state.particles[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .985; p.vy *= .985; p.life -= dt;
       if (p.life <= 0) state.particles.splice(i, 1);
@@ -414,16 +503,24 @@
     state.rockTimer -= dt;
     const rockCap = Math.min(24, 7 + state.wave * 2);
     if (state.wave > 1 && state.rocks.length > 0 && state.rocks.length < rockCap && state.rockTimer <= 0) {
-      state.rocks.push(makeRock(undefined, undefined, Math.random() < .72 ? 3 : 2));
+      const reinforcementSize = state.wave >= 3 && Math.random() < .2 ? 4 : (Math.random() < .72 ? 3 : 2);
+      state.rocks.push(makeRock(undefined, undefined, reinforcementSize));
       state.rockTimer = Math.max(1.05, 5.2 - state.wave * .34) + random(0, 1.1);
     }
     state.enemyTimer -= dt;
     const enemyCap = Math.min(3, 1 + Math.floor(state.wave / 5));
-    if (state.wave >= 2 && state.enemyTimer <= 0 && state.enemies.length < enemyCap) {
+    if (state.enemyTimer <= 0 && state.enemies.length < enemyCap) {
       state.enemies.push(makeEnemy()); state.enemyAlert = 2.4;
-      state.enemyTimer = Math.max(6.5, 17 - state.wave * .7) + random(1.5, 5);
+      state.enemyTimer = Math.max(6.5, 14.5 - state.wave * .6) + random(1.5, 4);
       tone(165, .18, 'square', .035, 105);
       setTimeout(() => tone(125, .22, 'square', .03, 75), 150);
+    }
+    state.cometTimer -= dt;
+    if (state.cometTimer <= 0 && state.comets.length === 0) {
+      state.comets.push(makeComet()); state.cometAlert = 2.2;
+      state.cometTimer = Math.max(8, 19 - state.wave * .55) + random(3, 8);
+      tone(95, .65, 'sawtooth', .045, 42);
+      setTimeout(() => tone(58, .75, 'sawtooth', .035, 30), 180);
     }
     if (state.rocks.length === 0 && ship && !ship.dead) { state.wave++; spawnWave(); }
   }
@@ -512,6 +609,48 @@
     ctx.restore();
   }
 
+  function drawEnemyIndicator(enemy, time) {
+    const margin = 42;
+    if (enemy.x >= margin && enemy.x <= state.width - margin && enemy.y >= margin && enemy.y <= state.height - margin) return;
+    const cx = state.width / 2, cy = state.height / 2;
+    const angle = Math.atan2(enemy.y - cy, enemy.x - cx);
+    const x = clamp(enemy.x, margin, state.width - margin);
+    const y = clamp(enemy.y, margin + 35, state.height - margin);
+    const pulse = .55 + Math.sin(time * .014 + enemy.phase) * .35;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(angle); ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ff4d8d'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-7, -7); ctx.lineTo(-4, 0); ctx.lineTo(-7, 7); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawComet(comet) {
+    const hot = comet.hue === 'cyan' ? '#67e8f9' : '#ff6a42';
+    const core = comet.hue === 'cyan' ? '#e8fdff' : '#ffe0a3';
+    ctx.save(); ctx.translate(comet.x, comet.y); ctx.rotate(comet.angle);
+    const tail = ctx.createLinearGradient(-95, 0, 10, 0);
+    tail.addColorStop(0, 'rgba(255,77,141,0)'); tail.addColorStop(.55, `${hot}35`); tail.addColorStop(1, hot);
+    ctx.fillStyle = tail; ctx.globalAlpha = .72; ctx.shadowColor = hot; ctx.shadowBlur = 18;
+    ctx.beginPath(); ctx.moveTo(9, -comet.radius * .55); ctx.lineTo(-random(75, 105), 0); ctx.lineTo(9, comet.radius * .55); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+    const glow = ctx.createRadialGradient(-4, -5, 1, 0, 0, comet.radius * 1.15);
+    glow.addColorStop(0, core); glow.addColorStop(.3, hot); glow.addColorStop(1, '#321c27');
+    ctx.fillStyle = glow; ctx.strokeStyle = core; ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(comet.radius, 0); ctx.lineTo(comet.radius * .38, -comet.radius * .72);
+    ctx.lineTo(-comet.radius * .5, -comet.radius * .58); ctx.lineTo(-comet.radius * .85, .05 * comet.radius);
+    ctx.lineTo(-comet.radius * .35, comet.radius * .7); ctx.lineTo(comet.radius * .4, comet.radius * .58); ctx.closePath();
+    ctx.fill(); ctx.stroke(); ctx.restore();
+  }
+
+  function drawDebris(shard) {
+    ctx.save(); ctx.translate(shard.x, shard.y); ctx.rotate(shard.angle);
+    ctx.fillStyle = '#ff5b42'; ctx.strokeStyle = '#ffc16e'; ctx.lineWidth = 1;
+    ctx.shadowColor = '#ff4d3d'; ctx.shadowBlur = 9;
+    ctx.beginPath(); ctx.moveTo(shard.radius * 1.6, 0); ctx.lineTo(-shard.radius, -shard.radius * .65);
+    ctx.lineTo(-shard.radius * .55, shard.radius * .78); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
   function drawRock(rock) {
     ctx.save(); ctx.translate(rock.x, rock.y); ctx.rotate(rock.angle);
     const palette = rock.palette || ROCK_PALETTES[0];
@@ -529,7 +668,9 @@
       const y1 = Math.sin(ridge.angle) * rock.radius * ridge.inner;
       const x2 = Math.cos(ridge.angle + ridge.bend) * rock.radius * ridge.outer;
       const y2 = Math.sin(ridge.angle + ridge.bend) * rock.radius * ridge.outer;
-      ctx.strokeStyle = 'rgba(214,235,241,.11)'; ctx.lineWidth = Math.max(.6, rock.radius * .018);
+      ctx.strokeStyle = rock.explosive ? 'rgba(255,143,77,.58)' : 'rgba(214,235,241,.11)';
+      ctx.shadowColor = rock.explosive ? '#ff4d3d' : 'transparent'; ctx.shadowBlur = rock.explosive ? 6 : 0;
+      ctx.lineWidth = Math.max(.6, rock.radius * (rock.explosive ? .026 : .018));
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     }
     for (const crater of rock.craters || []) {
@@ -546,6 +687,10 @@
 
     ctx.globalAlpha = .28; ctx.fillStyle = palette.dust;
     ctx.beginPath(); ctx.arc(-rock.radius * .26, -rock.radius * .28, Math.max(.8, rock.radius * .035), 0, TAU); ctx.fill();
+    if (rock.explosive) {
+      ctx.globalAlpha = .85; ctx.fillStyle = '#ffb15c'; ctx.shadowColor = '#ff4d3d'; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(rock.radius * .2, rock.radius * .08, Math.max(1.2, rock.radius * .045), 0, TAU); ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -563,6 +708,7 @@
 
     ctx.save();
     if (state.shake) ctx.translate(random(-state.shake, state.shake), random(-state.shake, state.shake));
+    for (const comet of state.comets) drawComet(comet);
     for (const rock of state.rocks) drawRock(rock);
     for (const enemy of state.enemies) drawEnemy(enemy, time);
     for (const b of state.bullets) {
@@ -575,18 +721,27 @@
       ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx / speed * 13, b.y - b.vy / speed * 13); ctx.stroke();
       ctx.fillStyle = '#ffd09d'; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, TAU); ctx.fill();
     }
+    for (const shard of state.debris) drawDebris(shard);
     ctx.shadowBlur = 0;
     for (const p of state.particles) {
       ctx.globalAlpha = Math.max(0, p.life / p.maxLife); ctx.fillStyle = p.color;
       ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     }
-    ctx.globalAlpha = 1; drawShip(state.ship, time); ctx.restore();
+    ctx.globalAlpha = 1; drawShip(state.ship, time);
+    for (const enemy of state.enemies) drawEnemyIndicator(enemy, time);
+    ctx.restore();
 
     if (state.flash > 0) { ctx.fillStyle = `rgba(255,77,141,${state.flash * 1.5})`; ctx.fillRect(0, 0, state.width, state.height); }
     if (state.enemyAlert > 0) {
       const alpha = Math.min(1, state.enemyAlert * 1.5) * (.74 + Math.sin(time * .02) * .26);
       ctx.globalAlpha = alpha; ctx.fillStyle = '#ff4d8d'; ctx.textAlign = 'center';
       ctx.font = '700 11px "Space Mono", monospace'; ctx.fillText('⚠  HOSTILE SIGNAL  ⚠', state.width / 2, 74);
+      ctx.globalAlpha = 1; ctx.textAlign = 'start';
+    }
+    if (state.cometAlert > 0) {
+      const alpha = Math.min(1, state.cometAlert * 1.5) * (.72 + Math.sin(time * .026) * .28);
+      ctx.globalAlpha = alpha; ctx.fillStyle = '#ffb05c'; ctx.textAlign = 'center';
+      ctx.font = '700 11px "Space Mono", monospace'; ctx.fillText('☄  COMET INBOUND  ☄', state.width / 2, state.enemyAlert > 0 ? 92 : 74);
       ctx.globalAlpha = 1; ctx.textAlign = 'start';
     }
     ctx.fillStyle = 'rgba(103,232,249,.045)'; ctx.fillRect(0, 0, state.width, 1); ctx.fillRect(0, state.height - 1, state.width, 1);

@@ -2,7 +2,7 @@
 
 A fast, responsive Asteroids-style arcade game built with plain HTML5 Canvas, CSS, and JavaScript. It has no runtime dependencies.
 
-The playfield scrolls early as the ship approaches an edge. Camera speed ramps up sharply with edge proximity, overtakes the ship while it still has a generous border, and smoothly settles when thrust is released—replacing classic screen-edge teleporting. The ship and varied cratered asteroids use layered, shaded canvas artwork rather than simple wireframes. Later sectors add larger asteroid waves, accelerating reinforcements, and hostile multi-hit interceptors with aimed plasma fire.
+The playfield scrolls early as the ship approaches an edge. Camera speed ramps up sharply with edge proximity, overtakes the ship while it still has a generous border, and smoothly settles when thrust is released—replacing classic screen-edge teleporting. The ship and varied cratered asteroids use layered, shaded canvas artwork rather than simple wireframes. The field escalates with colossal rocks, volatile red asteroids that explode into dangerous debris, increasingly frequent reinforcements, hostile multi-hit interceptors with aimed plasma fire, and roaring comets that streak through the sector.
 
 ## Play locally
 

@@ -1,4 +1,4 @@
-const CACHE = 'star-drift-v6';
+const CACHE = 'star-drift-v7';
 const ASSETS = ['./', './index.html', './styles.css', './game.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => event.waitUntil(
