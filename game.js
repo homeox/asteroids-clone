@@ -15,13 +15,20 @@
   const pauseLabel = document.querySelector('#pause-label');
 
   const TAU = Math.PI * 2;
+  const ROCK_PALETTES = [
+    { light: '#8097aa', base: '#40586b', dark: '#1c2b3b', edge: '#b8d0df', dust: '#d4e1e7' },
+    { light: '#947d76', base: '#5a4541', dark: '#2d2225', edge: '#d0b2a8', dust: '#e1c4b8' },
+    { light: '#78978d', base: '#405e58', dark: '#1b302f', edge: '#aed0c6', dust: '#cbe0d7' },
+    { light: '#8c789c', base: '#554368', dark: '#2a2138', edge: '#c6add8', dust: '#dac9e5' }
+  ];
   const state = {
     width: 0, height: 0, dpr: 1, running: false, paused: false,
     score: 0, high: Number(localStorage.getItem('star-drift-best') || 0),
     lives: 3, wave: 1, lastTime: 0, shake: 0, flash: 0,
-    ship: null, rocks: [], bullets: [], particles: [], stars: [],
+    ship: null, rocks: [], bullets: [], enemyBullets: [], enemies: [], particles: [], stars: [],
     keys: { left: false, right: false, thrust: false, fire: false },
-    camera: { vx: 0, vy: 0 }, nextShot: 0, audio: null
+    camera: { vx: 0, vy: 0 }, nextShot: 0, rockTimer: 5, enemyTimer: 12,
+    elapsed: 0, enemyAlert: 0, audio: null
   };
 
   const random = (min, max) => min + Math.random() * (max - min);
@@ -44,10 +51,10 @@
 
   function cameraBounds() {
     return {
-      insetX: clamp(state.width * .075, 56, 96),
-      insetY: clamp(state.height * .085, 50, 82),
-      zoneX: clamp(state.width * .24, 96, 230),
-      zoneY: clamp(state.height * .24, 82, 170)
+      insetX: clamp(state.width * .11, 72, 126),
+      insetY: clamp(state.height * .12, 60, 100),
+      zoneX: clamp(state.width * .34, 120, 320),
+      zoneY: clamp(state.height * .32, 96, 230)
     };
   }
 
@@ -68,11 +75,11 @@
     const { insetX, insetY, zoneX, zoneY } = cameraBounds();
     const pressureX = edgePressure(ship.x, state.width, zoneX, insetX);
     const pressureY = edgePressure(ship.y, state.height, zoneY, insetY);
-    const followGain = pressure => Math.pow(Math.abs(pressure), 1.45) * 1.65;
+    const followGain = pressure => Math.pow(Math.abs(pressure), 1.25) * 2.6;
     const accelerating = state.keys.thrust;
     const targetX = accelerating && Math.sign(ship.vx) === Math.sign(pressureX) ? ship.vx * followGain(pressureX) : 0;
     const targetY = accelerating && Math.sign(ship.vy) === Math.sign(pressureY) ? ship.vy * followGain(pressureY) : 0;
-    const response = 1 - Math.exp(-(accelerating ? 10 : 4.2) * dt);
+    const response = 1 - Math.exp(-(accelerating ? 12 : 4.2) * dt);
 
     state.camera.vx += (targetX - state.camera.vx) * response;
     state.camera.vy += (targetY - state.camera.vy) * response;
@@ -84,6 +91,8 @@
     ship.x -= dx; ship.y -= dy;
     for (const rock of state.rocks) { rock.x -= dx; rock.y -= dy; }
     for (const bullet of state.bullets) { bullet.x -= dx; bullet.y -= dy; }
+    for (const bullet of state.enemyBullets) { bullet.x -= dx; bullet.y -= dy; }
+    for (const enemy of state.enemies) { enemy.x -= dx; enemy.y -= dy; }
     for (const particle of state.particles) { particle.x -= dx; particle.y -= dy; }
     for (const star of state.stars) {
       star.x -= dx * (.16 + star.depth * .34);
@@ -117,7 +126,7 @@
   }
 
   function makeShip() {
-    return { x: state.width / 2, y: state.height / 2, vx: 0, vy: 0, angle: -Math.PI / 2, radius: 13, invulnerable: 2.4, dead: false };
+    return { x: state.width / 2, y: state.height / 2, vx: 0, vy: 0, angle: -Math.PI / 2, radius: 18, invulnerable: 2.4, dead: false };
   }
 
   function safeRockPosition() {
@@ -135,11 +144,32 @@
     const pos = x == null ? safeRockPosition() : { x, y };
     const radius = size === 3 ? random(35, 52) : size === 2 ? random(21, 29) : random(10, 16);
     const points = Math.floor(random(8, 13));
+    const craterCount = Math.floor(random(1, size + 3));
+    const palette = ROCK_PALETTES[Math.floor(Math.random() * ROCK_PALETTES.length)];
     return {
       ...pos, size, radius, angle: random(0, TAU), spin: random(-.65, .65),
       vx: random(-1, 1) * (48 + state.wave * 3) / Math.sqrt(size),
       vy: random(-1, 1) * (48 + state.wave * 3) / Math.sqrt(size),
-      shape: Array.from({ length: points }, () => random(.72, 1.18))
+      palette,
+      shape: Array.from({ length: points }, (_, i) => clamp(random(.76, 1.16) + (i % 3 === 0 ? random(-.12, .08) : 0), .64, 1.2)),
+      craters: Array.from({ length: craterCount }, () => ({
+        angle: random(0, TAU), distance: random(.08, .5), radius: random(.09, .2),
+        squash: random(.55, .9), rotation: random(0, TAU)
+      })),
+      ridges: Array.from({ length: Math.floor(random(2, size + 4)) }, () => ({
+        angle: random(0, TAU), inner: random(.05, .3), outer: random(.45, .82), bend: random(-.18, .18)
+      }))
+    };
+  }
+
+  function makeEnemy() {
+    const pos = safeRockPosition();
+    const angle = state.ship ? Math.atan2(state.ship.y - pos.y, state.ship.x - pos.x) : random(0, TAU);
+    const health = Math.min(4, 2 + Math.floor(state.wave / 4));
+    return {
+      ...pos, vx: Math.cos(angle) * 45, vy: Math.sin(angle) * 45, angle,
+      radius: 18, health, maxHealth: health, shootTimer: random(.8, 1.8),
+      age: 0, phase: random(0, TAU), turnBias: random(-1, 1)
     };
   }
 
@@ -147,15 +177,17 @@
     unlockAudio();
     state.score = 0; state.lives = 3; state.wave = 1; state.running = true; state.paused = false;
     state.camera.vx = 0; state.camera.vy = 0;
-    state.bullets = []; state.particles = []; state.rocks = []; state.ship = makeShip();
+    state.elapsed = 0; state.rockTimer = 5; state.enemyTimer = 11; state.enemyAlert = 0;
+    state.bullets = []; state.enemyBullets = []; state.enemies = []; state.particles = []; state.rocks = []; state.ship = makeShip();
     startPanel.classList.remove('visible'); overPanel.classList.remove('visible'); pauseLabel.classList.remove('visible');
     spawnWave(); updateHud(); state.lastTime = performance.now();
   }
 
   function spawnWave() {
     state.rocks = [];
-    const count = Math.min(3 + state.wave, 10);
+    const count = Math.min(4 + Math.floor(state.wave * 1.45), 18);
     for (let i = 0; i < count; i++) state.rocks.push(makeRock());
+    state.rockTimer = Math.max(1.25, 5.4 - state.wave * .32) + random(0, 1.4);
     state.ship.invulnerable = Math.max(state.ship.invulnerable, 1.8);
     waveEl.textContent = `SECTOR ${String(state.wave).padStart(2, '0')}`;
     tone(280, .12, 'sine', .04);
@@ -167,7 +199,7 @@
     const s = state.ship;
     const speed = 570;
     state.bullets.push({
-      x: s.x + Math.cos(s.angle) * 18, y: s.y + Math.sin(s.angle) * 18,
+      x: s.x + Math.cos(s.angle) * 29, y: s.y + Math.sin(s.angle) * 29,
       vx: s.vx + Math.cos(s.angle) * speed, vy: s.vy + Math.sin(s.angle) * speed,
       life: .82, radius: 2.2
     });
@@ -181,6 +213,42 @@
       const angle = random(0, TAU), velocity = random(speed * .25, speed);
       state.particles.push({ x, y, vx: Math.cos(angle) * velocity, vy: Math.sin(angle) * velocity,
         life: random(.25, .85), maxLife: .85, size: random(1, 3.5), color });
+    }
+  }
+
+  function fireEnemy(enemy) {
+    if (!state.ship || state.ship.dead) return;
+    const dx = state.ship.x - enemy.x;
+    const dy = state.ship.y - enemy.y;
+    const distanceToShip = Math.max(1, Math.hypot(dx, dy));
+    const bulletSpeed = Math.min(330, 230 + state.wave * 7);
+    const travelTime = distanceToShip / bulletSpeed;
+    const aimX = state.ship.x + state.ship.vx * travelTime * .32;
+    const aimY = state.ship.y + state.ship.vy * travelTime * .32;
+    const angle = Math.atan2(aimY - enemy.y, aimX - enemy.x) + random(-.055, .055);
+    state.enemyBullets.push({
+      x: enemy.x + Math.cos(angle) * 21, y: enemy.y + Math.sin(angle) * 21,
+      vx: Math.cos(angle) * bulletSpeed, vy: Math.sin(angle) * bulletSpeed,
+      angle, life: 4.5, radius: 4
+    });
+    tone(random(185, 225), .12, 'square', .026, 105);
+  }
+
+  function damageEnemy(index, x, y) {
+    const enemy = state.enemies[index];
+    enemy.health--;
+    addParticles(x, y, '#ff9b54', 7, 105);
+    state.shake = Math.max(state.shake, 2.5);
+    tone(260, .07, 'sawtooth', .028, 130);
+    if (enemy.health <= 0) {
+      state.score += 300 + state.wave * 25;
+      if (state.score > state.high) state.high = state.score;
+      addParticles(enemy.x, enemy.y, '#ff4d8d', 24, 230);
+      addParticles(enemy.x, enemy.y, '#67e8f9', 12, 160);
+      state.shake = Math.max(state.shake, 9);
+      tone(105, .38, 'sawtooth', .06, 38);
+      state.enemies.splice(index, 1);
+      updateHud();
     }
   }
 
@@ -233,6 +301,8 @@
   function update(dt, now) {
     for (const star of state.stars) star.pulse += dt * (.5 + star.depth);
     if (!state.running || state.paused) return;
+    state.elapsed += dt;
+    state.enemyAlert = Math.max(0, state.enemyAlert - dt);
     const ship = state.ship;
     if (ship && !ship.dead) {
       const turn = (state.keys.left ? -1 : 0) + (state.keys.right ? 1 : 0);
@@ -242,7 +312,7 @@
         ship.vy += Math.sin(ship.angle) * 215 * dt;
         if (Math.random() < .75) {
           const back = ship.angle + Math.PI + random(-.22, .22);
-          state.particles.push({ x: ship.x - Math.cos(ship.angle) * 11, y: ship.y - Math.sin(ship.angle) * 11,
+          state.particles.push({ x: ship.x - Math.cos(ship.angle) * 14, y: ship.y - Math.sin(ship.angle) * 14,
             vx: ship.vx * .15 + Math.cos(back) * random(60, 145), vy: ship.vy * .15 + Math.sin(back) * random(60, 145),
             life: random(.15, .35), maxLife: .35, size: random(1, 2.8), color: Math.random() < .5 ? '#67e8f9' : '#ff4d8d' });
         }
@@ -257,17 +327,17 @@
       const { insetX, insetY } = cameraBounds();
       if (ship.x < insetX) {
         ship.x = insetX;
-        state.camera.vx = Math.min(state.camera.vx, ship.vx * 1.15);
+        state.camera.vx = Math.min(state.camera.vx, ship.vx * 1.35);
       } else if (ship.x > state.width - insetX) {
         ship.x = state.width - insetX;
-        state.camera.vx = Math.max(state.camera.vx, ship.vx * 1.15);
+        state.camera.vx = Math.max(state.camera.vx, ship.vx * 1.35);
       }
       if (ship.y < insetY) {
         ship.y = insetY;
-        state.camera.vy = Math.min(state.camera.vy, ship.vy * 1.15);
+        state.camera.vy = Math.min(state.camera.vy, ship.vy * 1.35);
       } else if (ship.y > state.height - insetY) {
         ship.y = state.height - insetY;
-        state.camera.vy = Math.max(state.camera.vy, ship.vy * 1.15);
+        state.camera.vy = Math.max(state.camera.vy, ship.vy * 1.35);
       }
       ship.invulnerable = Math.max(0, ship.invulnerable - dt);
     }
@@ -277,6 +347,13 @@
       if (b.life <= 0 || b.x < -40 || b.x > state.width + 40 || b.y < -40 || b.y > state.height + 40) {
         state.bullets.splice(i, 1); continue;
       }
+      let spent = false;
+      for (let j = state.enemies.length - 1; j >= 0; j--) {
+        if (distance(b, state.enemies[j]) < state.enemies[j].radius + b.radius) {
+          damageEnemy(j, b.x, b.y); state.bullets.splice(i, 1); spent = true; break;
+        }
+      }
+      if (spent) continue;
       for (let j = state.rocks.length - 1; j >= 0; j--) {
         if (distance(b, state.rocks[j]) < state.rocks[j].radius + b.radius) {
           splitRock(j, b.x, b.y); state.bullets.splice(i, 1); break;
@@ -289,40 +366,186 @@
       if (ship && !ship.dead && ship.invulnerable <= 0 && distance(ship, rock) < rock.radius + ship.radius * .7) hitShip();
     }
 
+    for (let i = state.enemies.length - 1; i >= 0; i--) {
+      const enemy = state.enemies[i];
+      enemy.age += dt; enemy.shootTimer -= dt; enemy.phase += dt * 2.2;
+      if (ship && !ship.dead) {
+        const dx = ship.x - enemy.x, dy = ship.y - enemy.y;
+        const d = Math.max(1, Math.hypot(dx, dy));
+        const desiredSpeed = Math.min(155, 92 + state.wave * 4);
+        const orbit = Math.sin(enemy.phase) * .34 + enemy.turnBias * .12;
+        const targetVx = (dx / d * Math.cos(orbit) - dy / d * Math.sin(orbit)) * desiredSpeed;
+        const targetVy = (dy / d * Math.cos(orbit) + dx / d * Math.sin(orbit)) * desiredSpeed;
+        const steer = 1 - Math.exp(-1.8 * dt);
+        enemy.vx += (targetVx - enemy.vx) * steer; enemy.vy += (targetVy - enemy.vy) * steer;
+        enemy.angle = Math.atan2(dy, dx);
+        if (enemy.shootTimer <= 0 && d < Math.max(720, state.width * .8)) {
+          fireEnemy(enemy);
+          enemy.shootTimer = Math.max(.72, 1.75 - state.wave * .055) + random(.25, .9);
+        }
+        if (enemy.age > 1.2 && d < enemy.radius + ship.radius * .75 && ship.invulnerable <= 0) {
+          hitShip();
+          addParticles(enemy.x, enemy.y, '#ff9b54', 16, 185);
+          state.enemies.splice(i, 1); continue;
+        }
+      }
+      enemy.x += enemy.vx * dt; enemy.y += enemy.vy * dt;
+      if (enemy.age > 34 || enemy.x < -380 || enemy.x > state.width + 380 || enemy.y < -380 || enemy.y > state.height + 380) {
+        state.enemies.splice(i, 1);
+      }
+    }
+
+    for (let i = state.enemyBullets.length - 1; i >= 0; i--) {
+      const b = state.enemyBullets[i];
+      b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+      if (b.life <= 0 || b.x < -50 || b.x > state.width + 50 || b.y < -50 || b.y > state.height + 50) {
+        state.enemyBullets.splice(i, 1); continue;
+      }
+      if (ship && !ship.dead && ship.invulnerable <= 0 && distance(b, ship) < b.radius + ship.radius * .72) {
+        state.enemyBullets.splice(i, 1); hitShip();
+      }
+    }
+
     for (let i = state.particles.length - 1; i >= 0; i--) {
       const p = state.particles[i]; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .985; p.vy *= .985; p.life -= dt;
       if (p.life <= 0) state.particles.splice(i, 1);
     }
     state.shake = Math.max(0, state.shake - dt * 25); state.flash = Math.max(0, state.flash - dt);
+    state.rockTimer -= dt;
+    const rockCap = Math.min(24, 7 + state.wave * 2);
+    if (state.wave > 1 && state.rocks.length > 0 && state.rocks.length < rockCap && state.rockTimer <= 0) {
+      state.rocks.push(makeRock(undefined, undefined, Math.random() < .72 ? 3 : 2));
+      state.rockTimer = Math.max(1.05, 5.2 - state.wave * .34) + random(0, 1.1);
+    }
+    state.enemyTimer -= dt;
+    const enemyCap = Math.min(3, 1 + Math.floor(state.wave / 5));
+    if (state.wave >= 2 && state.enemyTimer <= 0 && state.enemies.length < enemyCap) {
+      state.enemies.push(makeEnemy()); state.enemyAlert = 2.4;
+      state.enemyTimer = Math.max(6.5, 17 - state.wave * .7) + random(1.5, 5);
+      tone(165, .18, 'square', .035, 105);
+      setTimeout(() => tone(125, .22, 'square', .03, 75), 150);
+    }
     if (state.rocks.length === 0 && ship && !ship.dead) { state.wave++; spawnWave(); }
   }
 
-  function drawShip(ship) {
+  function drawShip(ship, time) {
     if (!ship || ship.dead || (ship.invulnerable > 0 && Math.floor(ship.invulnerable * 9) % 2)) return;
-    ctx.save(); ctx.translate(ship.x, ship.y); ctx.rotate(ship.angle);
-    ctx.strokeStyle = '#eaf8ff'; ctx.lineWidth = 1.6; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 10;
-    ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-12, -10); ctx.lineTo(-7, 0); ctx.lineTo(-12, 10); ctx.closePath(); ctx.stroke();
-    ctx.strokeStyle = 'rgba(103,232,249,.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.stroke();
+    const pulse = .78 + Math.sin(time * .012) * .14;
+    ctx.save(); ctx.translate(ship.x, ship.y); ctx.rotate(ship.angle); ctx.scale(1.18, 1.18);
+
+    ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 18;
+    const hull = ctx.createLinearGradient(-14, -12, 20, 10);
+    hull.addColorStop(0, '#10283e'); hull.addColorStop(.48, '#28627c'); hull.addColorStop(1, '#0b192d');
+    ctx.fillStyle = hull; ctx.strokeStyle = '#d8fbff'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(24, 0); ctx.lineTo(5, -7); ctx.lineTo(-8, -14); ctx.lineTo(-6, -6);
+    ctx.lineTo(-14, -3); ctx.lineTo(-11, 0); ctx.lineTo(-14, 3); ctx.lineTo(-6, 6);
+    ctx.lineTo(-8, 14); ctx.lineTo(5, 7); ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#234f69'; ctx.strokeStyle = 'rgba(103,232,249,.95)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(17, 0); ctx.lineTo(1, -5); ctx.lineTo(-5, 0); ctx.lineTo(1, 5); ctx.closePath(); ctx.fill(); ctx.stroke();
+
+    ctx.fillStyle = '#3b5872';
+    ctx.beginPath(); ctx.moveTo(2, -7); ctx.lineTo(-7, -12); ctx.lineTo(-5, -5); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(2, 7); ctx.lineTo(-7, 12); ctx.lineTo(-5, 5); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,77,141,.75)';
+    ctx.beginPath(); ctx.moveTo(-2, -7); ctx.lineTo(-8, -13); ctx.moveTo(-2, 7); ctx.lineTo(-8, 13); ctx.stroke();
+
+    const canopy = ctx.createRadialGradient(7, -2, 0, 6, 0, 7);
+    canopy.addColorStop(0, '#e8fdff'); canopy.addColorStop(.25, '#67e8f9'); canopy.addColorStop(1, '#173e5b');
+    ctx.fillStyle = canopy; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 9;
+    ctx.beginPath(); ctx.ellipse(7, 0, 6.3, 3.7, 0, 0, TAU); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#ff4d8d';
+    ctx.beginPath(); ctx.arc(-10, -3.2, 1.7, 0, TAU); ctx.arc(-10, 3.2, 1.7, 0, TAU); ctx.fill();
     if (state.keys.thrust) {
-      ctx.strokeStyle = Math.random() < .5 ? '#67e8f9' : '#ff4d8d'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(-9, -5); ctx.lineTo(random(-22, -14), 0); ctx.lineTo(-9, 5); ctx.stroke();
+      const flameLength = random(17, 28);
+      ctx.globalAlpha = pulse; ctx.fillStyle = '#ff4d8d'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.moveTo(-11, -4.5); ctx.lineTo(-11 - flameLength, 0); ctx.lineTo(-11, 4.5); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#dffcff'; ctx.shadowColor = '#67e8f9';
+      ctx.beginPath(); ctx.moveTo(-10, -2.2); ctx.lineTo(-19 - flameLength * .45, 0); ctx.lineTo(-10, 2.2); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.globalAlpha = pulse * .7; ctx.fillStyle = '#67e8f9'; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.arc(-11, 0, 2.2, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
 
-  function drawRock(rock) {
-    ctx.save(); ctx.translate(rock.x, rock.y); ctx.rotate(rock.angle);
-    ctx.strokeStyle = rock.size === 1 ? 'rgba(237,247,255,.75)' : 'rgba(126,184,211,.7)';
-    ctx.lineWidth = rock.size === 1 ? 1.4 : 1.2; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = rock.size === 1 ? 3 : 1;
+  function traceRock(rock) {
     ctx.beginPath();
     rock.shape.forEach((scale, i) => {
       const a = i / rock.shape.length * TAU, r = rock.radius * scale;
       const x = Math.cos(a) * r, y = Math.sin(a) * r;
       i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     });
-    ctx.closePath(); ctx.stroke();
-    ctx.strokeStyle = 'rgba(103,232,249,.13)'; ctx.beginPath();
-    ctx.moveTo(-rock.radius * .35, -rock.radius * .25); ctx.lineTo(rock.radius * .15, -rock.radius * .45); ctx.lineTo(rock.radius * .4, -.05 * rock.radius); ctx.stroke();
+    ctx.closePath();
+  }
+
+  function drawEnemy(enemy, time) {
+    const pulse = .72 + Math.sin(time * .015 + enemy.phase) * .2;
+    ctx.save(); ctx.translate(enemy.x, enemy.y); ctx.rotate(enemy.angle);
+    ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 15;
+    ctx.fillStyle = '#21101e'; ctx.strokeStyle = '#ff7bab'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(21, 0); ctx.lineTo(6, -5); ctx.lineTo(-5, -15); ctx.lineTo(-2, -5);
+    ctx.lineTo(-14, -9); ctx.lineTo(-9, 0); ctx.lineTo(-14, 9); ctx.lineTo(-2, 5);
+    ctx.lineTo(-5, 15); ctx.lineTo(6, 5); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = '#4b1733'; ctx.strokeStyle = 'rgba(255,155,84,.8)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(13, 0); ctx.lineTo(1, -5); ctx.lineTo(-5, 0); ctx.lineTo(1, 5); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffcf6e'; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.ellipse(8, 0, 4.8, 3.2, 0, 0, TAU); ctx.fill();
+
+    ctx.globalAlpha = pulse; ctx.fillStyle = '#ff4d8d'; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.moveTo(-10, -3); ctx.lineTo(random(-23, -17), 0); ctx.lineTo(-10, 3); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+    if (enemy.health < enemy.maxHealth) {
+      const width = 28;
+      ctx.fillStyle = 'rgba(2,4,8,.8)'; ctx.fillRect(-width / 2, -22, width, 3);
+      ctx.fillStyle = '#ff4d8d'; ctx.fillRect(-width / 2, -22, width * enemy.health / enemy.maxHealth, 3);
+    }
+    ctx.restore();
+  }
+
+  function drawRock(rock) {
+    ctx.save(); ctx.translate(rock.x, rock.y); ctx.rotate(rock.angle);
+    const palette = rock.palette || ROCK_PALETTES[0];
+    const surface = ctx.createRadialGradient(-rock.radius * .34, -rock.radius * .4, rock.radius * .04, 0, 0, rock.radius * 1.18);
+    surface.addColorStop(0, palette.light); surface.addColorStop(.45, palette.base); surface.addColorStop(1, palette.dark);
+    traceRock(rock); ctx.fillStyle = surface; ctx.shadowColor = 'rgba(103,232,249,.24)'; ctx.shadowBlur = rock.size === 1 ? 5 : 3; ctx.fill();
+    ctx.strokeStyle = palette.edge; ctx.lineWidth = rock.size === 1 ? 1.35 : 1.7; ctx.stroke(); ctx.shadowBlur = 0;
+
+    ctx.save(); traceRock(rock); ctx.clip();
+    ctx.fillStyle = 'rgba(235,248,250,.075)';
+    ctx.beginPath(); ctx.moveTo(-rock.radius * .75, -rock.radius * .25); ctx.lineTo(-rock.radius * .12, -rock.radius * .72);
+    ctx.lineTo(rock.radius * .2, -rock.radius * .08); ctx.closePath(); ctx.fill();
+    for (const ridge of rock.ridges || []) {
+      const x1 = Math.cos(ridge.angle) * rock.radius * ridge.inner;
+      const y1 = Math.sin(ridge.angle) * rock.radius * ridge.inner;
+      const x2 = Math.cos(ridge.angle + ridge.bend) * rock.radius * ridge.outer;
+      const y2 = Math.sin(ridge.angle + ridge.bend) * rock.radius * ridge.outer;
+      ctx.strokeStyle = 'rgba(214,235,241,.11)'; ctx.lineWidth = Math.max(.6, rock.radius * .018);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    for (const crater of rock.craters || []) {
+      const cx = Math.cos(crater.angle) * rock.radius * crater.distance;
+      const cy = Math.sin(crater.angle) * rock.radius * crater.distance;
+      const cr = rock.radius * crater.radius;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(crater.rotation);
+      ctx.fillStyle = 'rgba(3,7,12,.32)'; ctx.strokeStyle = 'rgba(220,238,242,.18)'; ctx.lineWidth = Math.max(.55, rock.radius * .016);
+      ctx.beginPath(); ctx.ellipse(0, 0, cr, cr * crater.squash, 0, 0, TAU); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,0,0,.28)'; ctx.beginPath(); ctx.arc(cr * .1, cr * .08, cr * .66, 0, Math.PI); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+
+    ctx.globalAlpha = .28; ctx.fillStyle = palette.dust;
+    ctx.beginPath(); ctx.arc(-rock.radius * .26, -rock.radius * .28, Math.max(.8, rock.radius * .035), 0, TAU); ctx.fill();
     ctx.restore();
   }
 
@@ -341,18 +564,31 @@
     ctx.save();
     if (state.shake) ctx.translate(random(-state.shake, state.shake), random(-state.shake, state.shake));
     for (const rock of state.rocks) drawRock(rock);
+    for (const enemy of state.enemies) drawEnemy(enemy, time);
     for (const b of state.bullets) {
       ctx.fillStyle = '#fff'; ctx.shadowColor = '#67e8f9'; ctx.shadowBlur = 12;
       ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, TAU); ctx.fill();
+    }
+    for (const b of state.enemyBullets) {
+      const speed = Math.max(1, Math.hypot(b.vx, b.vy));
+      ctx.strokeStyle = 'rgba(255,77,141,.5)'; ctx.lineWidth = 3; ctx.shadowColor = '#ff4d8d'; ctx.shadowBlur = 15;
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx / speed * 13, b.y - b.vy / speed * 13); ctx.stroke();
+      ctx.fillStyle = '#ffd09d'; ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, TAU); ctx.fill();
     }
     ctx.shadowBlur = 0;
     for (const p of state.particles) {
       ctx.globalAlpha = Math.max(0, p.life / p.maxLife); ctx.fillStyle = p.color;
       ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     }
-    ctx.globalAlpha = 1; drawShip(state.ship); ctx.restore();
+    ctx.globalAlpha = 1; drawShip(state.ship, time); ctx.restore();
 
     if (state.flash > 0) { ctx.fillStyle = `rgba(255,77,141,${state.flash * 1.5})`; ctx.fillRect(0, 0, state.width, state.height); }
+    if (state.enemyAlert > 0) {
+      const alpha = Math.min(1, state.enemyAlert * 1.5) * (.74 + Math.sin(time * .02) * .26);
+      ctx.globalAlpha = alpha; ctx.fillStyle = '#ff4d8d'; ctx.textAlign = 'center';
+      ctx.font = '700 11px "Space Mono", monospace'; ctx.fillText('⚠  HOSTILE SIGNAL  ⚠', state.width / 2, 74);
+      ctx.globalAlpha = 1; ctx.textAlign = 'start';
+    }
     ctx.fillStyle = 'rgba(103,232,249,.045)'; ctx.fillRect(0, 0, state.width, 1); ctx.fillRect(0, state.height - 1, state.width, 1);
   }
 
